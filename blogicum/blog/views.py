@@ -1,4 +1,4 @@
-from django.http import HttpResponseRedirect, HttpResponseForbidden
+from django.http import HttpResponseForbidden
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -7,8 +7,9 @@ from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
 from django.utils import timezone
-from django.views.generic import (CreateView, DeleteView, DetailView, ListView,
-                                  UpdateView)
+from django.views.generic import (
+    CreateView, DeleteView, DetailView, ListView, UpdateView
+)
 
 from blog.forms import CommentEditForm, PostEditForm, UserEditForm
 from blog.models import Category, Comment, Post, User
@@ -55,7 +56,6 @@ class CategoryListView(IndexListView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['category'] = self.category
-
         return context
 
 
@@ -131,14 +131,10 @@ class PostDetailView(DetailView):
 
     def get_object(self, queryset=None):
         post = super().get_object(queryset=queryset)
-        if (
-            post.author != self.request.user
-            and (
-                not post.is_published
-                or not post.category.is_published
-                or post.pub_date > timezone.now()
-            )
-        ):
+        if (post.author != self.request.user
+                and (not post.is_published
+                     or not post.category.is_published
+                     or post.pub_date > timezone.now())):
             raise Http404()
         return post
 
@@ -176,10 +172,11 @@ class CommonPostMixin:
 
 
 class PostUpdateView(CommonPostMixin, LoginRequiredMixin, UpdateView):
-
     def get_success_url(self):
-        return reverse_lazy('blog:post_detail',
-                            kwargs={'post_id': self.object.pk})
+        return reverse_lazy(
+            'blog:post_detail',
+            kwargs={'post_id': self.object.pk}
+        )
 
 
 class PostDeleteView(CommonPostMixin, LoginRequiredMixin, DeleteView):
@@ -189,21 +186,12 @@ class PostDeleteView(CommonPostMixin, LoginRequiredMixin, DeleteView):
     success_url = reverse_lazy('blog:index')
 
     def delete(self, request, *args, **kwargs):
-        # Получаем объект поста
         post = self.get_object()
-        post_id = post.id
-        
-        # Удаляем все связанные комментарии
-        Comment.objects.filter(post=post).delete()
-        
-        # Явное удаление поста
-        super().delete(request, *args, **kwargs)
-        
-        # Дополнительная проверка удаления
-        if Post.objects.filter(id=post_id).exists():
-            raise Exception(f"Пост с ID {post_id} не был удален!")
-        
-        return HttpResponseRedirect(self.get_success_url())
+        post.comments.all().delete()
+        from django.core.cache import cache
+        cache.clear()
+        response = super().delete(request, *args, **kwargs)
+        return response
 
 
 class CommentMixin:
@@ -228,8 +216,10 @@ class CommentMixin:
         return super().form_valid(form)
 
     def get_success_url(self):
-        return reverse_lazy('blog:post_detail',
-                            kwargs={'post_id': self.kwargs.get('post_id')})
+        return reverse_lazy(
+            'blog:post_detail',
+            kwargs={'post_id': self.kwargs.get('post_id')}
+        )
 
 
 class CommentUpdateView(LoginRequiredMixin, CommentMixin, UpdateView):
@@ -244,18 +234,22 @@ class CommentDeleteView(LoginRequiredMixin, DeleteView):
     def dispatch(self, request, *args, **kwargs):
         comment = get_object_or_404(Comment, pk=kwargs['comment_id'])
         if comment.author != request.user:
-            return HttpResponseForbidden("У вас нет прав на удаление этого комментария")
+            return HttpResponseForbidden(
+                "У вас нет прав на удаление этого комментария"
+            )
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        # Удаляем форму из контекста для страницы удаления
         if 'form' in context:
             del context['form']
         return context
 
     def get_success_url(self):
-        return reverse_lazy('blog:post_detail', kwargs={'post_id': self.kwargs['post_id']})
+        return reverse_lazy(
+            'blog:post_detail',
+            kwargs={'post_id': self.kwargs['post_id']}
+        )
 
 
 class ProfileCreateView(CreateView):

@@ -1,5 +1,5 @@
-from django.shortcuts import render
-from django.views.generic import TemplateView
+from django.shortcuts import render  # type: ignore
+from django.views.generic import TemplateView  # type: ignore
 
 
 class TemplateAboutView(TemplateView):
