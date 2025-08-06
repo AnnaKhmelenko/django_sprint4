@@ -24,67 +24,46 @@ class ManageProfileLinksException(Exception):
 
 @pytest.mark.django_db
 def test_custom_err_handlers(client):
-    blogicum_urls = _import_blogicum_urls()
-    _check_auth_urls_included(blogicum_urls)
-    _check_registration_url_overridden()
-    # Проверка шаблонов auth
-    _check_auth_templates_exist()
-
-
-def _import_blogicum_urls():
-    """Проверяет импорт blogicum.urls."""
     try:
         from blogicum import urls as blogicum_urls
-        return blogicum_urls
-    except Exception as e:
+    except Exception:
         raise AssertionError(
-            "Убедитесь, в головном файле с маршрутами нет ошибок. "
-            f"Ошибка: {str(e)}"
-        ) from e
-
-
-def _check_auth_urls_included(blogicum_urls):
-    """Проверяет подключение django.contrib.auth.urls."""
+            "Убедитесь, в головном файле с маршрутами нет ошибок."
+        )
     urls_src_squashed = squash_code(inspect.getsource(blogicum_urls))
     if "django.contrib.auth.urls" not in urls_src_squashed:
         raise AssertionError(
-            "Убедитесь, что подключены маршруты для работы "
-            "с пользователями из "
-            "`django.contrib.auth.urls`."
+            "Убедитесь, что подключены маршруты для работы с пользователями из"
+            " `django.contrib.auth.urls`."
         )
 
+    def search_url_patterns(substring):
+        resolver = get_resolver()
+        results = []
 
-def _check_registration_url_overridden():
-    """Проверяет переопределение registration URL."""
+        def search_patterns(head, patterns):
+            for pattern in patterns:
+                if isinstance(pattern, URLPattern):
+                    pattern_as_str = head + str(pattern.pattern)
+                    if substring in pattern_as_str:
+                        results.append(pattern)
+                elif isinstance(pattern, URLResolver):
+                    search_patterns(
+                        head + str(pattern.pattern), pattern.url_patterns
+                    )
+            return results
+
+        search_patterns(head="", patterns=resolver.url_patterns)
+
+        return results
+
     registration_url = "auth/registration/"
-    auth_registration_patterns = _search_url_patterns(registration_url)
+    auth_registration_patterns = search_url_patterns(registration_url)
     assert auth_registration_patterns, (
-        "Убедитесь, что в головном файле с маршрутами переопределён маршрут "
-        f"`{registration_url}`."
+        "Убедитесь, что в головном файле с маршрутами переопределён маршрут"
+        f" `{registration_url}`."
     )
 
-
-def _search_url_patterns(substring):
-    """Ищет URL паттерны по подстроке."""
-    resolver = get_resolver()
-    results = []
-
-    def search_patterns(head, patterns):
-        for pattern in patterns:
-            if isinstance(pattern, URLPattern):
-                if substring in (head + str(pattern.pattern)):
-                    results.append(pattern)
-            elif isinstance(pattern, URLResolver):
-                search_patterns(
-                    head + str(pattern.pattern), pattern.url_patterns
-                )
-
-    search_patterns(head="", patterns=resolver.url_patterns)
-    return results
-
-
-def _check_auth_templates_exist():
-    """Проверяет наличие всех auth шаблонов."""
     auth_templates = {
         "logged_out.html",
         "login.html",
@@ -96,21 +75,20 @@ def _check_auth_templates_exist():
         "password_reset_form.html",
         "registration_form.html",
     }
-
     for template in auth_templates:
         try:
-            template_path = (
-                Path(settings.TEMPLATES_DIR) / "registration" / template
-            )
-            assert template_path.is_file(), (
-                f"Убедитесь, что файл шаблона "
-                f"`registration/{template}` существует."
-            )
-        except (TypeError, AttributeError) as e:
+            fpath: Path = Path(settings.TEMPLATES_DIR) / "registration" / template
+        except Exception as e:
             raise AssertionError(
-                "Убедитесь, что TEMPLATES_DIR в настройках является "
-                "path-like объектом. Ошибка: " + str(e)
+                'Убедитесь, что переменная TEMPLATES_DIR в настройках проекта '
+                'является строкой (str) или объектом, соответствующим path-like интерфейсу '
+                '(например, экземпляром pathlib.Path). '
+                f'При операции Path(settings.TEMPLATES_DIR) / "registration", возникла ошибка: {e}'
             )
+        frpath: Path = fpath.relative_to(settings.BASE_DIR)
+        assert os.path.isfile(
+            fpath.resolve()
+        ), f"Убедитесь, что файл шаблона `{frpath}` существует."
 
 
 @pytest.mark.django_db

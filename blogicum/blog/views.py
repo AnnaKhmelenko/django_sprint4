@@ -179,18 +179,38 @@ class PostUpdateView(CommonPostMixin, LoginRequiredMixin, UpdateView):
         )
 
 
-class PostDeleteView(CommonPostMixin, LoginRequiredMixin, DeleteView):
+class PostDeleteView(LoginRequiredMixin, DeleteView):
     model = Post
     pk_url_kwarg = 'post_id'
     template_name = 'blog/create.html'
     success_url = reverse_lazy('blog:index')
 
+    def dispatch(self, request, *args, **kwargs):
+        """Проверка прав доступа перед выполнением"""
+        self.object = self.get_object()
+        if self.object.author != request.user:
+            return HttpResponseForbidden(
+                "У вас нет прав на удаление этого поста"
+            )
+        return super().dispatch(request, *args, **kwargs)
+
     def delete(self, request, *args, **kwargs):
-        post = self.get_object()
-        post.comments.all().delete()
+        """Кастомная логика удаления с очисткой зависимостей"""
         from django.core.cache import cache
+        # Получаем пост и его ID до удаления
+        post = self.get_object()
+        post_id = post.id
+        # Удаляем все связанные комментарии
+        post.comments.all().delete()
+        # Очищаем кэш
         cache.clear()
+        # Выполняем стандартное удаление
         response = super().delete(request, *args, **kwargs)
+        # Дополнительная проверка, что пост действительно удален
+        if Post.objects.filter(id=post_id).exists():
+            raise Exception(
+                f"Пост с ID {post_id} не был удален из базы данных!"
+            )
         return response
 
 
