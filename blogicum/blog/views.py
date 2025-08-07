@@ -1,18 +1,19 @@
-from django.http import HttpResponseForbidden
+from django.core.cache import cache
+from django.http import Http404, HttpResponseForbidden
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Count
-from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views.generic import (
     CreateView, DeleteView, DetailView, ListView, UpdateView
 )
 
 from blog.forms import CommentEditForm, PostEditForm, UserEditForm
-from blog.models import Category, Comment, Post, User
+from blog.models import Category, Post, User, Comment
+from blog.mixins import ProfileSuccessUrlMixin, CommonPostMixin, CommentMixin
+from django.contrib.auth.mixins import LoginRequiredMixin
 
 
 def create_queryset(manager=Post.objects, filters=True, annotations=True):
@@ -99,16 +100,10 @@ def add_comment(request, post_id):
     return redirect('blog:post_detail', post_id=post_id)
 
 
-class PostCreateView(LoginRequiredMixin, CreateView):
+class PostCreateView(LoginRequiredMixin, ProfileSuccessUrlMixin, CreateView):
     model = Post
     form_class = PostEditForm
     template_name = 'blog/create.html'
-
-    def get_success_url(self):
-        return reverse_lazy(
-            'blog:profile',
-            kwargs={'username': self.request.user.username}
-        )
 
     def form_valid(self, form):
         form.instance.author = self.request.user
@@ -123,7 +118,7 @@ class PostDetailView(DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['form'] = CommentEditForm(instance=self.object)
+        context['form'] = CommentEditForm()
         context['comments'] = (
             self.object.comments.all().select_related('author')
         )
@@ -139,41 +134,19 @@ class PostDetailView(DetailView):
         return post
 
 
-class ProfiletUpdateView(LoginRequiredMixin, UpdateView):
+class ProfileUpdateView(
+    LoginRequiredMixin, ProfileSuccessUrlMixin, UpdateView
+):
     form_class = UserEditForm
     template_name = 'blog/user.html'
 
     def get_object(self, queryset=None):
         return self.request.user
 
-    def form_valid(self, form):
-        form.instance.author = self.request.user
-        return super().form_valid(form)
 
+class PostUpdateView(CommonPostMixin, UpdateView):
     def get_success_url(self):
-        return reverse_lazy(
-            'blog:profile',
-            kwargs={'username': self.request.user.username}
-        )
-
-
-class CommonPostMixin:
-    model = Post
-    template_name = 'blog/create.html'
-    pk_url_kwarg = 'post_id'
-    form_class = PostEditForm
-    posts = None
-
-    def dispatch(self, request, *args, **kwargs):
-        post = get_object_or_404(Post, pk=kwargs.get('post_id'))
-        if post.author != request.user:
-            return redirect('blog:post_detail', self.kwargs.get('post_id'))
-        return super().dispatch(request, *args, **kwargs)
-
-
-class PostUpdateView(CommonPostMixin, LoginRequiredMixin, UpdateView):
-    def get_success_url(self):
-        return reverse_lazy(
+        return reverse(
             'blog:post_detail',
             kwargs={'post_id': self.object.pk}
         )
@@ -184,65 +157,26 @@ class PostDeleteView(LoginRequiredMixin, DeleteView):
     pk_url_kwarg = 'post_id'
     template_name = 'blog/create.html'
     success_url = reverse_lazy('blog:index')
+    # Оставила reverse_lazy т.к. на уровне класса, с reverse не проходят тесты
 
     def dispatch(self, request, *args, **kwargs):
         """Проверка прав доступа перед выполнением"""
         self.object = self.get_object()
         if self.object.author != request.user:
             return HttpResponseForbidden(
-                "У вас нет прав на удаление этого поста"
+                'У вас нет прав на удаление этого поста'
             )
         return super().dispatch(request, *args, **kwargs)
 
     def delete(self, request, *args, **kwargs):
         """Кастомная логика удаления с очисткой зависимостей"""
-        from django.core.cache import cache
-        # Получаем пост и его ID до удаления
         post = self.get_object()
-        post_id = post.id
-        # Удаляем все связанные комментарии
         post.comments.all().delete()
-        # Очищаем кэш
         cache.clear()
-        # Выполняем стандартное удаление
-        response = super().delete(request, *args, **kwargs)
-        # Дополнительная проверка, что пост действительно удален
-        if Post.objects.filter(id=post_id).exists():
-            raise Exception(
-                f"Пост с ID {post_id} не был удален из базы данных!"
-            )
-        return response
+        return super().delete(request, *args, **kwargs)
 
 
-class CommentMixin:
-    model = Comment
-    form_class = CommentEditForm
-    template_name = 'blog/comment.html'
-    pk_url_kwarg = 'comment_id'
-    comment = None
-
-    def dispatch(self, request, *args, **kwargs):
-        comment_id = kwargs.get('comment_id')
-        if not comment_id:
-            raise Http404("comment_id not provided")
-        instance = get_object_or_404(Comment, pk=comment_id)
-        if instance.author != request.user:
-            return redirect('blog:post_detail', post_id=instance.post.pk)
-        return super().dispatch(request, *args, **kwargs)
-
-    def form_valid(self, form):
-        form.instance.author = self.request.user
-        form.instance.comment = self.comment
-        return super().form_valid(form)
-
-    def get_success_url(self):
-        return reverse_lazy(
-            'blog:post_detail',
-            kwargs={'post_id': self.kwargs.get('post_id')}
-        )
-
-
-class CommentUpdateView(LoginRequiredMixin, CommentMixin, UpdateView):
+class CommentUpdateView(CommentMixin, UpdateView):
     pass
 
 
@@ -255,24 +189,33 @@ class CommentDeleteView(LoginRequiredMixin, DeleteView):
         comment = get_object_or_404(Comment, pk=kwargs['comment_id'])
         if comment.author != request.user:
             return HttpResponseForbidden(
-                "У вас нет прав на удаление этого комментария"
+                'У вас нет прав на удаление этого комментария'
             )
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
+        """Удаляем ненужную форму из контекста."""
         context = super().get_context_data(**kwargs)
         if 'form' in context:
-            del context['form']
+            del context["form"]
         return context
 
     def get_success_url(self):
-        return reverse_lazy(
+        """URL для перенаправления после удаления."""
+        return reverse(
             'blog:post_detail',
             kwargs={'post_id': self.kwargs['post_id']}
         )
+
+    def delete(self, request, *args, **kwargs):
+        """Обработка удаления комментария."""
+        comment = self.get_object()
+        comment.delete()
+        return redirect(self.get_success_url())
 
 
 class ProfileCreateView(CreateView):
     form_class = UserEditForm
     template_name = 'registration/registration_form.html'
     success_url = reverse_lazy('login')
+    # Оставила reverse_lazy т.к. на уровне класса, с reverse не проходят тесты
